@@ -49,9 +49,9 @@ export const ingestUrl = async (req, res) => {
  * @desc Query RAG pipeline for active URL context
  * @route POST /api/chat
  */
-export const chatWithUrl = async (req, res) => { 
-  try{
-      const { url, question } = req.body;
+export const chatWithUrl = async (req, res) => {
+  try {
+    const { url, question } = req.body;
 
     if (!url || !question || !question.trim()) {
       return res.status(400).json({
@@ -60,7 +60,16 @@ export const chatWithUrl = async (req, res) => {
     }
 
     console.log(`[Chat API] Querying context for "${url}" with question: "${question}"`);
-  }catch{
+    const result = await queryRagChain(url.trim(), question.trim());
 
+    return res.status(200).json({
+      answer: result.answer,
+      sources: result.sources
+    });
+  } catch (error) {
+    console.error('[Chat API Error]:', error);
+    return res.status(500).json({
+      error: error.message || 'An unexpected error occurred while generating the answer.'
+    });
   }
-}
+};

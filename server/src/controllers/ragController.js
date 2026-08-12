@@ -43,3 +43,16 @@ export const ingestUrl = async (req, res) => {
     });
   }
 };
+
+
+/**
+ * @desc Query RAG pipeline for active URL context
+ * @route POST /api/chat
+ */
+export const chatWithUrl = async (req, res) => { 
+  try{
+
+  }catch{
+    
+  }
+}

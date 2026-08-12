@@ -51,8 +51,16 @@ export const ingestUrl = async (req, res) => {
  */
 export const chatWithUrl = async (req, res) => { 
   try{
+      const { url, question } = req.body;
 
+    if (!url || !question || !question.trim()) {
+      return res.status(400).json({
+        error: 'Both "url" and "question" parameters are required.'
+      });
+    }
+
+    console.log(`[Chat API] Querying context for "${url}" with question: "${question}"`);
   }catch{
-    
+
   }
 }

@@ -16,6 +16,7 @@ let embeddingsEngine = null;
 const CHUNKS_COLLECTION = 'chunks';
 const VECTOR_INDEX_NAME = 'vector_index';
 
+const isDbConnected = () => mongoose.connection.readyState === 1;
 
 /**
  * Initialize Embeddings

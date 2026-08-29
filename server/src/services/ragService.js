@@ -1,6 +1,22 @@
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 import mongoose from 'mongoose';
+
+
+
+// In-Memory Fallback Storage (when MongoDB is offline/unreachable)
+const inMemoryDocuments = new Map();
+const inMemoryChatHistory = [];
+const inMemoryChunksMap = new Map(); // Stores text chunks per URL for fallback similarity matching
+
+let atlasVectorStore = null;
+let memoryVectorStore = null;
+let embeddingsEngine = null;
+
+const CHUNKS_COLLECTION = 'chunks';
+const VECTOR_INDEX_NAME = 'vector_index';
+
+
 /**
  * Initialize Embeddings
  */

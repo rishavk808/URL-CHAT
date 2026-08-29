@@ -14,3 +14,24 @@ const getEmbeddingsEngine = () => {
   }
   return embeddingsEngine;
 };
+const getVectorStore = async () => {
+  const embeddings = getEmbeddingsEngine();
+
+  if (isDbConnected()) {
+    if (!atlasVectorStore) {
+      const collection = mongoose.connection.collection(CHUNKS_COLLECTION);
+      atlasVectorStore = new MongoDBAtlasVectorSearch(embeddings, {
+        collection,
+        indexName: VECTOR_INDEX_NAME,
+        textKey: 'text',
+        embeddingKey: 'embedding'
+      });
+    }
+    return atlasVectorStore;
+  }
+
+  if (!memoryVectorStore) {
+    memoryVectorStore = new MemoryVectorStore(embeddings);
+  }
+  return memoryVectorStore;
+};

@@ -1,3 +1,6 @@
+import axios from 'axios';
+import * as cheerio from 'cheerio';
+import mongoose from 'mongoose';
 /**
  * Initialize Embeddings
  */

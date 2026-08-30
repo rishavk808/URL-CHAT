@@ -81,3 +81,19 @@ export const scrapeAndCleanUrl = async (url) => {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
       }
     });
+    const html = response.data;
+    const $ = cheerio.load(html);
+
+    // Extract Title (use only the document's own <title>, not stray <title> nodes
+    // inside inline SVG icons, and collapse any internal whitespace/newlines)
+    const title =
+      $('head > title').first().text().replace(/\s+/g, ' ').trim() ||
+      $('h1').first().text().replace(/\s+/g, ' ').trim() ||
+      $('meta[property="og:title"]').attr('content') ||
+      url;
+    }
+
+catch{
+
+}
+};

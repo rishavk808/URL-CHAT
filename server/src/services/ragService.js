@@ -94,7 +94,15 @@ export const scrapeAndCleanUrl = async (url) => {
        // Strip script, style, nav, footer, header, aside, iframe, noscript, etc.
     $('script, style, nav, footer, header, aside, iframe, noscript, svg, form').remove();
     }
-
+       // Extract text from main or body
+    let rawText = '';
+    if ($('main').length > 0) {
+      rawText = $('main').text();
+    } else if ($('article').length > 0) {
+      rawText = $('article').text();
+    } else {
+      rawText = $('body').text();
+    }
 catch{
 
 }

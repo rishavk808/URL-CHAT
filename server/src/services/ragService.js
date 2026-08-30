@@ -55,3 +55,15 @@ const getVectorStore = async () => {
   }
   return memoryVectorStore;
 };
+
+ //Remove previously indexed chunks for a URL from whichever vector store backend is active
+ 
+const removeUrlFromVectorStore = async (url) => {
+  if (isDbConnected()) {
+    await mongoose.connection.collection(CHUNKS_COLLECTION).deleteMany({ url });
+  } else if (memoryVectorStore && memoryVectorStore.memoryVectors) {
+    memoryVectorStore.memoryVectors = memoryVectorStore.memoryVectors.filter(
+      (v) => v.metadata && v.metadata.url !== url
+    );
+  }
+};

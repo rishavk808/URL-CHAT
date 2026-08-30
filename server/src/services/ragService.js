@@ -81,6 +81,7 @@ export const scrapeAndCleanUrl = async (url) => {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
       }
     });
+
     const html = response.data;
     const $ = cheerio.load(html);
 
@@ -91,10 +92,11 @@ export const scrapeAndCleanUrl = async (url) => {
       $('h1').first().text().replace(/\s+/g, ' ').trim() ||
       $('meta[property="og:title"]').attr('content') ||
       url;
-       // Strip script, style, nav, footer, header, aside, iframe, noscript, etc.
+
+    // Strip script, style, nav, footer, header, aside, iframe, noscript, etc.
     $('script, style, nav, footer, header, aside, iframe, noscript, svg, form').remove();
-    }
-       // Extract text from main or body
+
+    // Extract text from main or body
     let rawText = '';
     if ($('main').length > 0) {
       rawText = $('main').text();
@@ -103,7 +105,8 @@ export const scrapeAndCleanUrl = async (url) => {
     } else {
       rawText = $('body').text();
     }
-      // Clean whitespace
+
+    // Clean whitespace
     const cleanedText = rawText
       .replace(/\s+/g, ' ')
       .replace(/\n+/g, '\n')
@@ -112,8 +115,14 @@ export const scrapeAndCleanUrl = async (url) => {
     if (!cleanedText || cleanedText.length < 50) {
       throw new Error('Could not extract sufficient readable text from the provided URL.');
     }
-catch{
-    
 
-}
+    return { title, text: cleanedText };
+  } catch (error) {
+    if (error.response) {
+      throw new Error(`Failed to scrape URL (HTTP ${error.response.status}): ${error.response.statusText}`);
+    } else if (error.code === 'ECONNABORTED') {
+      throw new Error('Webpage request timed out. Please verify the URL and try again.');
+    }
+    throw new Error(`Scraping error: ${error.message}`);
+  }
 };

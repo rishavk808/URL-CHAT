@@ -91,6 +91,8 @@ export const scrapeAndCleanUrl = async (url) => {
       $('h1').first().text().replace(/\s+/g, ' ').trim() ||
       $('meta[property="og:title"]').attr('content') ||
       url;
+       // Strip script, style, nav, footer, header, aside, iframe, noscript, etc.
+    $('script, style, nav, footer, header, aside, iframe, noscript, svg, form').remove();
     }
 
 catch{

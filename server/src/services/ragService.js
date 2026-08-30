@@ -103,7 +103,17 @@ export const scrapeAndCleanUrl = async (url) => {
     } else {
       rawText = $('body').text();
     }
+      // Clean whitespace
+    const cleanedText = rawText
+      .replace(/\s+/g, ' ')
+      .replace(/\n+/g, '\n')
+      .trim();
+
+    if (!cleanedText || cleanedText.length < 50) {
+      throw new Error('Could not extract sufficient readable text from the provided URL.');
+    }
 catch{
+    
 
 }
 };

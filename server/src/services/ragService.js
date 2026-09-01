@@ -154,3 +154,6 @@ export const processAndIndexUrl = async (url) => {
       }
     });
   });
+
+    // Store chunks in fallback memory map
+  inMemoryChunksMap.set(url, docs);

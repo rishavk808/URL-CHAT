@@ -157,3 +157,12 @@ export const processAndIndexUrl = async (url) => {
 
     // Store chunks in fallback memory map
   inMemoryChunksMap.set(url, docs);
+
+   // Step 3 & 4: Embed & Index into Vector Store
+  try {
+    const store = await getVectorStore();
+    await removeUrlFromVectorStore(url); // avoid duplicate chunks if this URL was already indexed
+    await store.addDocuments(docs);
+  } catch (embedError) {
+    console.warn(`[VectorStore Indexing Notice]: Embedding API warning (${embedError.message}). Fallback chunk index active.`);
+  }

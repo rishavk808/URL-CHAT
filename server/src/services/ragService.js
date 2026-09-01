@@ -126,3 +126,16 @@ export const scrapeAndCleanUrl = async (url) => {
     throw new Error(`Scraping error: ${error.message}`);
   }
 };
+
+/**
+ * Ingest URL into vector store and database
+ */
+export const processAndIndexUrl = async (url) => {
+  // Step 1: Scrape
+  const { title, text } = await scrapeAndCleanUrl(url);
+
+  // Step 2: Chunk
+  const splitter = new RecursiveCharacterTextSplitter({
+    chunkSize: 1000,
+    chunkOverlap: 200
+  });

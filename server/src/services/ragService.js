@@ -139,7 +139,8 @@ export const processAndIndexUrl = async (url) => {
     chunkSize: 1000,
     chunkOverlap: 200
   });
-    const rawDocs = await splitter.createDocuments([text], [{ url, title }]);
+
+  const rawDocs = await splitter.createDocuments([text], [{ url, title }]);
   const chunkCount = rawDocs.length;
 
   // Add chunk metadata index
@@ -155,10 +156,10 @@ export const processAndIndexUrl = async (url) => {
     });
   });
 
-    // Store chunks in fallback memory map
+  // Store chunks in fallback memory map
   inMemoryChunksMap.set(url, docs);
 
-   // Step 3 & 4: Embed & Index into Vector Store
+  // Step 3 & 4: Embed & Index into Vector Store
   try {
     const store = await getVectorStore();
     await removeUrlFromVectorStore(url); // avoid duplicate chunks if this URL was already indexed
@@ -166,3 +167,34 @@ export const processAndIndexUrl = async (url) => {
   } catch (embedError) {
     console.warn(`[VectorStore Indexing Notice]: Embedding API warning (${embedError.message}). Fallback chunk index active.`);
   }
+
+  // Save to DB or In-Memory fallback
+  let docData;
+  if (isDbConnected()) {
+    const savedDoc = await DocumentModel.findOneAndUpdate(
+      { url },
+      { title, chunkCount, createdAt: new Date() },
+      { upsert: true, new: true }
+    );
+    docData = {
+      documentId: savedDoc._id,
+      url: savedDoc.url,
+      title: savedDoc.title,
+      chunkCount: savedDoc.chunkCount,
+      createdAt: savedDoc.createdAt
+    };
+  } else {
+    const memId = `mem_${Date.now()}`;
+    docData = {
+      documentId: memId,
+      _id: memId,
+      url,
+      title,
+      chunkCount,
+      createdAt: new Date()
+    };
+    inMemoryDocuments.set(url, docData);
+  }
+
+  return docData;
+};

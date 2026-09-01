@@ -139,3 +139,18 @@ export const processAndIndexUrl = async (url) => {
     chunkSize: 1000,
     chunkOverlap: 200
   });
+    const rawDocs = await splitter.createDocuments([text], [{ url, title }]);
+  const chunkCount = rawDocs.length;
+
+  // Add chunk metadata index
+  const docs = rawDocs.map((doc, idx) => {
+    return new LangChainDocument({
+      pageContent: doc.pageContent,
+      metadata: {
+        url,
+        title,
+        chunkIndex: idx,
+        totalChunks: chunkCount
+      }
+    });
+  });

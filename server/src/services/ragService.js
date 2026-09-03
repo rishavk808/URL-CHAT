@@ -198,3 +198,29 @@ export const processAndIndexUrl = async (url) => {
 
   return docData;
 };
+
+/**
+ * Keyword & Text Relevance Fallback Search
+ */
+const performTextRelevanceSearch = (url, question, k = 4) => {
+  const docs = inMemoryChunksMap.get(url) || [];
+  if (docs.length === 0) return [];
+
+  const queryTerms = question.toLowerCase().split(/\W+/).filter(t => t.length > 2);
+
+  const scoredDocs = docs.map(doc => {
+    const textLower = doc.pageContent.toLowerCase();
+    let score = 0;
+    queryTerms.forEach(term => {
+      if (textLower.includes(term)) {
+        score += 1;
+      }
+    });
+    return { doc, score };
+  });
+
+  scoredDocs.sort((a, b) => b.score - a.score);
+  
+  // Return top K docs (or first K docs if all scores 0)
+  return scoredDocs.slice(0, k).map(item => item.doc);
+};

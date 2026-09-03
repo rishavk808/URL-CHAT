@@ -224,3 +224,48 @@ const performTextRelevanceSearch = (url, question, k = 4) => {
   // Return top K docs (or first K docs if all scores 0)
   return scoredDocs.slice(0, k).map(item => item.doc);
 };
+
+/**
+ * Answer chat question using RAG similarity search and Gemini-1.5-Flash
+ */
+export const queryRagChain = async (url, question) => {
+  let filteredDocs = [];
+
+  // Try Vector Store similarity search
+  try {
+    const store = await getVectorStore();
+    const searchResults = await store.similaritySearch(question, 15);
+    filteredDocs = searchResults.filter((doc) => doc.metadata && doc.metadata.url === url).slice(0, 4);
+  } catch (err) {
+    console.warn(`[Vector Search Warning]: ${err.message}. Using fallback relevance index.`);
+  }
+
+  // Fallback to text relevance search if vector search returned no results
+  if (!filteredDocs || filteredDocs.length === 0) {
+    filteredDocs = performTextRelevanceSearch(url, question, 4);
+  }
+
+  // Format context string
+  const contextText = filteredDocs
+    .map((doc, index) => `[Source Chunk ${index + 1}]\n${doc.pageContent}`)
+    .join('\n\n');
+
+  if (!contextText || filteredDocs.length === 0) {
+    const fallbackAnswer = "I could not find relevant information in the provided URL. Please make sure the URL has been properly indexed.";
+    
+    // Save to Chat History
+    if (isDbConnected()) {
+      await ChatMessageModel.create({ url, role: 'user', content: question });
+      await ChatMessageModel.create({ url, role: 'assistant', content: fallbackAnswer, sources: [] });
+    } else {
+      inMemoryChatHistory.push(
+        { url, role: 'user', content: question, createdAt: new Date() },
+        { url, role: 'assistant', content: fallbackAnswer, sources: [], createdAt: new Date() }
+      );
+    }
+
+    return {
+      answer: fallbackAnswer,
+      sources: []
+    };
+  }

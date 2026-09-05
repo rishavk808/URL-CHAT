@@ -308,3 +308,20 @@ Context:
     pageContent: doc.pageContent,
     metadata: doc.metadata
   }));
+
+    // Save to Chat History
+  if (isDbConnected()) {
+    await ChatMessageModel.create({ url, role: 'user', content: question });
+    await ChatMessageModel.create({ url, role: 'assistant', content: answer, sources });
+  } else {
+    inMemoryChatHistory.push(
+      { url, role: 'user', content: question, createdAt: new Date() },
+      { url, role: 'assistant', content: answer, sources, createdAt: new Date() }
+    );
+  }
+
+  return {
+    answer,
+    sources
+  };
+};

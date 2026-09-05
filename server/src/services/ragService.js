@@ -294,3 +294,17 @@ Context:
     ],
     ['human', '{question}']
   ]);
+
+    const formattedPrompt = await promptTemplate.formatMessages({
+    context: contextText,
+    question
+  });
+
+  const response = await model.invoke(formattedPrompt);
+  const answer = typeof response.content === 'string' ? response.content : JSON.stringify(response.content);
+
+  // Extract source excerpts for response
+  const sources = filteredDocs.map((doc) => ({
+    pageContent: doc.pageContent,
+    metadata: doc.metadata
+  }));

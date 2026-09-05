@@ -269,3 +269,11 @@ export const queryRagChain = async (url, question) => {
       sources: []
     };
   }
+
+  // Prepare Gemini Model
+  const apiKey = process.env.GOOGLE_API_KEY;
+  const model = new ChatGoogleGenerativeAI({
+    apiKey,
+    model: process.env.GOOGLE_CHAT_MODEL || 'models/gemini-3.6-flash',
+    temperature: 0.2
+  });

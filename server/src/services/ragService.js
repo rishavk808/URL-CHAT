@@ -277,3 +277,20 @@ export const queryRagChain = async (url, question) => {
     model: process.env.GOOGLE_CHAT_MODEL || 'models/gemini-3.6-flash',
     temperature: 0.2
   });
+
+    const promptTemplate = ChatPromptTemplate.fromMessages([
+    [
+      'system',
+      `You are an AI assistant helping users answer questions based strictly on the provided website content context.
+
+Rules:
+1. Answer questions strictly based on the provided context below.
+2. If the context lacks sufficient info, state strictly: "I could not find relevant information in the provided URL."
+3. Do not assume or extrapolate facts not present in the context.
+4. Format your answer with clear markdown (bold headers, bullet points, tables, code blocks) when appropriate.
+
+Context:
+{context}`
+    ],
+    ['human', '{question}']
+  ]);

@@ -349,3 +349,13 @@ export const removeDocumentFromStore = async (url) => {
     return { url };
   }
 };
+
+/**
+ * Get all document records
+ */
+export const getStoredDocuments = async () => {
+  if (isDbConnected()) {
+    return await DocumentModel.find().sort({ createdAt: -1 });
+  }
+  return Array.from(inMemoryDocuments.values()).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+};

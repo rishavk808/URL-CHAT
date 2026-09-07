@@ -325,3 +325,27 @@ Context:
     sources
   };
 };
+
+/**
+ * Remove document and vectors
+ */
+export const removeDocumentFromStore = async (url) => {
+  await removeUrlFromVectorStore(url);
+  inMemoryChunksMap.delete(url);
+
+  if (isDbConnected()) {
+    const docResult = await DocumentModel.findOneAndDelete({ url });
+    await ChatMessageModel.deleteMany({ url });
+    return docResult;
+  } else {
+    inMemoryDocuments.delete(url);
+    const indicesToRemove = [];
+    inMemoryChatHistory.forEach((msg, i) => {
+      if (msg.url === url) indicesToRemove.push(i);
+    });
+    for (let i = indicesToRemove.length - 1; i >= 0; i--) {
+      inMemoryChatHistory.splice(indicesToRemove[i], 1);
+    }
+    return { url };
+  }
+};

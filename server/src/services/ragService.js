@@ -350,12 +350,20 @@ export const removeDocumentFromStore = async (url) => {
   }
 };
 
-/**
- * Get all document records
- */
+// Get all document records
 export const getStoredDocuments = async () => {
   if (isDbConnected()) {
     return await DocumentModel.find().sort({ createdAt: -1 });
   }
   return Array.from(inMemoryDocuments.values()).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+};
+
+/**
+ *Get chat history for URL
+ */
+export const getStoredChatHistory = async (url) => {
+  if (isDbConnected()) {
+    return await ChatMessageModel.find({ url }).sort({ createdAt: 1 });
+  }
+  return inMemoryChatHistory.filter((msg) => msg.url === url);
 };

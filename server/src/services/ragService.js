@@ -1,8 +1,14 @@
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 import mongoose from 'mongoose';
-
-
+import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters';
+import { GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI } from '@langchain/google-genai';
+import { MemoryVectorStore } from 'langchain/vectorstores/memory';
+import { MongoDBAtlasVectorSearch } from '@langchain/community/vectorstores/mongodb_atlas';
+import { Document as LangChainDocument } from '@langchain/core/documents';
+import { ChatPromptTemplate } from '@langchain/core/prompts';
+import DocumentModel from '../models/Document.js';
+import ChatMessageModel from '../models/ChatMessage.js';
 
 // In-Memory Fallback Storage (when MongoDB is offline/unreachable)
 const inMemoryDocuments = new Map();
@@ -18,9 +24,8 @@ const VECTOR_INDEX_NAME = 'vector_index';
 
 const isDbConnected = () => mongoose.connection.readyState === 1;
 
-/**
- * Initialize Embeddings
- */
+ //Initialize Embeddings
+
 const getEmbeddingsEngine = () => {
   if (!embeddingsEngine) {
     const apiKey = process.env.GOOGLE_API_KEY;
@@ -34,6 +39,7 @@ const getEmbeddingsEngine = () => {
   }
   return embeddingsEngine;
 };
+
 const getVectorStore = async () => {
   const embeddings = getEmbeddingsEngine();
 
@@ -55,6 +61,7 @@ const getVectorStore = async () => {
   }
   return memoryVectorStore;
 };
+
 
  //Remove previously indexed chunks for a URL from whichever vector store backend is active
  
@@ -278,7 +285,7 @@ export const queryRagChain = async (url, question) => {
     temperature: 0.2
   });
 
-    const promptTemplate = ChatPromptTemplate.fromMessages([
+  const promptTemplate = ChatPromptTemplate.fromMessages([
     [
       'system',
       `You are an AI assistant helping users answer questions based strictly on the provided website content context.
@@ -295,7 +302,7 @@ Context:
     ['human', '{question}']
   ]);
 
-    const formattedPrompt = await promptTemplate.formatMessages({
+  const formattedPrompt = await promptTemplate.formatMessages({
     context: contextText,
     question
   });
@@ -309,7 +316,7 @@ Context:
     metadata: doc.metadata
   }));
 
-    // Save to Chat History
+  // Save to Chat History
   if (isDbConnected()) {
     await ChatMessageModel.create({ url, role: 'user', content: question });
     await ChatMessageModel.create({ url, role: 'assistant', content: answer, sources });
@@ -350,7 +357,9 @@ export const removeDocumentFromStore = async (url) => {
   }
 };
 
-// Get all document records
+/**
+ * Get all document records
+ */
 export const getStoredDocuments = async () => {
   if (isDbConnected()) {
     return await DocumentModel.find().sort({ createdAt: -1 });
@@ -366,4 +375,22 @@ export const getStoredChatHistory = async (url) => {
     return await ChatMessageModel.find({ url }).sort({ createdAt: 1 });
   }
   return inMemoryChatHistory.filter((msg) => msg.url === url);
+};
+
+/**
+ * Verify persisted vector data at server boot.
+ * Embeddings now live in MongoDB Atlas Vector Search (the "chunks" collection), so they
+ * survive restarts and do not need to be re-scraped/re-embedded on every boot.
+ */
+export const rehydrateVectorStoreFromDb = async () => {
+  if (!isDbConnected()) return;
+  try {
+    const docCount = await DocumentModel.countDocuments();
+    const chunkCount = await mongoose.connection.collection(CHUNKS_COLLECTION).countDocuments();
+    console.log(
+      `[RAG Service] Found ${docCount} document record(s) and ${chunkCount} indexed chunk(s) already persisted in MongoDB Atlas Vector Search.`
+    );
+  } catch (error) {
+    console.error(`[RAG Service] Rehydration check error: ${error.message}`);
+  }
 };

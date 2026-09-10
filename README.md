@@ -228,28 +228,6 @@ Other root scripts:
 | `npm run start:server-only`    | production server without rebuilding the client            |
 
 ---
-
-## Environment variables
-
-### Backend — `server/.env` locally, host dashboard in production
-
-| Variable                 | Required            | Notes |
-| ------------------------ | ------------------ | ----- |
-| `GOOGLE_API_KEY`         | **yes**            | Server exits on startup without it. |
-| `MONGO_URI`              | yes in production  | Atlas connection string. Without it, data is in-memory only. |
-| `CLIENT_URL`             | yes in production  | Frontend origin(s) for CORS, e.g. `https://url-chat.vercel.app`. Comma-separate to allow several. |
-| `NODE_ENV`               | yes in production  | Set to `production`. |
-| `PORT`                   | no                 | Defaults to `5000`. |
-| `GOOGLE_CHAT_MODEL`      | no                 | Defaults to `models/gemini-3.6-flash`. |
-| `GOOGLE_EMBEDDING_MODEL` | no                 | Defaults to `models/gemini-embedding-001` (3072 dims — must match the Atlas index). |
-
-### Frontend — `client/.env`
-
-| Variable       | Required           | Notes |
-| -------------- | ----------------- | ----- |
-| `VITE_API_URL` | yes in production | Backend API base, e.g. `https://url-chat-api.onrender.com/api`. Omit locally (Vite proxy handles it). |
-
----
 ## Design decisions & fallbacks
 
 - **Graceful degradation.** No Mongo? The server logs a warning and runs on an

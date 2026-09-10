@@ -250,33 +250,6 @@ Other root scripts:
 | `VITE_API_URL` | yes in production | Backend API base, e.g. `https://url-chat-api.onrender.com/api`. Omit locally (Vite proxy handles it). |
 
 ---
-
-## Deployment
-
-Backend on **Render**, frontend on **Vercel** (or use the single-port `npm start` on any Node host).
-
-### 1. MongoDB Atlas (one-time)
-
-```bash
-node server/scripts/setupVectorIndex.js
-```
-
-Creates the `chunks` collection and the `vector_index` Atlas Vector Search index
-(3072 dimensions, cosine similarity) that retrieval depends on. Atlas takes a minute
-or two to finish building the index before it is queryable.
-
-### 2. Backend (Render)
-
-- Root directory `server/`, build `npm install`, start `npm run start:prod`.
-- Set `GOOGLE_API_KEY`, `MONGO_URI`, `CLIENT_URL`, `NODE_ENV=production`.
-
-### 3. Frontend (Vercel)
-
-- Root directory `client/`, framework Vite.
-- Set `VITE_API_URL` to the Render backend URL with `/api` appended.
-
----
-
 ## Design decisions & fallbacks
 
 - **Graceful degradation.** No Mongo? The server logs a warning and runs on an

@@ -1,0 +1,128 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    font-family: 'Plus Jakarta Sans', sans-serif;
+  }
+  code, pre {
+    font-family: 'JetBrains Mono', monospace;
+  }
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(24, 24, 27, 0.5);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(63, 63, 70, 0.7);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(113, 113, 122, 0.9);
+}
+
+/* Markdown Container Styling */
+.markdown-body {
+  font-size: 0.875rem;
+  line-height: 1.65;
+}
+
+.markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4 {
+  font-weight: 600;
+  color: #f4f4f5;
+  margin-top: 1em;
+  margin-bottom: 0.5em;
+}
+
+.markdown-body h1 { font-size: 1.2rem; border-bottom: 1px solid #27272a; padding-bottom: 0.3em; }
+.markdown-body h2 { font-size: 1.1rem; }
+.markdown-body h3 { font-size: 1rem; }
+
+.markdown-body p {
+  margin-bottom: 0.85em;
+}
+
+.markdown-body p:last-child {
+  margin-bottom: 0;
+}
+
+.markdown-body ul, .markdown-body ol {
+  margin-bottom: 0.85em;
+  padding-left: 1.4em;
+}
+
+.markdown-body ul { list-style-type: disc; }
+.markdown-body ol { list-style-type: decimal; }
+
+.markdown-body li {
+  margin-bottom: 0.3em;
+}
+
+.markdown-body strong {
+  font-weight: 600;
+  color: #60a5fa;
+}
+
+.markdown-body code {
+  background-color: rgba(39, 39, 42, 0.8);
+  color: #38bdf8;
+  padding: 0.15em 0.4em;
+  border-radius: 0.375rem;
+  font-size: 0.875em;
+  border: 1px solid rgba(63, 63, 70, 0.5);
+}
+
+.markdown-body pre {
+  background-color: #09090b;
+  border: 1px solid #27272a;
+  border-radius: 0.5rem;
+  padding: 1rem;
+  overflow-x: auto;
+  margin-bottom: 0.85em;
+}
+
+.markdown-body pre code {
+  background-color: transparent;
+  padding: 0;
+  border: none;
+  color: #e4e4e7;
+}
+
+.markdown-body blockquote {
+  border-left: 3px solid #3b82f6;
+  padding-left: 0.85em;
+  color: #a1a1aa;
+  font-style: italic;
+  margin-bottom: 0.85em;
+}
+
+.markdown-body table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 0.85em;
+  font-size: 0.9em;
+}
+
+.markdown-body th, .markdown-body td {
+  border: 1px solid #27272a;
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+}
+
+.markdown-body th {
+  background-color: #18181b;
+  color: #93c5fd;
+}
+
+.markdown-body tr:nth-child(even) {
+  background-color: rgba(24, 24, 27, 0.4);
+}

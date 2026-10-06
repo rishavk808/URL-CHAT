@@ -16,8 +16,6 @@ RAG-powered chat over any webpage. Paste a URL, and ask questions that are answe
 - [API reference](#api-reference)
 - [Data model](#data-model)
 - [Local development](#local-development)
-- [Environment variables](#environment-variables)
-- [Deployment](#deployment)
 - [Design decisions & fallbacks](#design-decisions--fallbacks)
 
 ---
@@ -175,8 +173,8 @@ URL-CHAT/
 └── server/
     ├── scripts/
     │   ├── setupVectorIndex.js       # one-time: create `chunks` collection + `vector_index`
-    │   └── migrateToUserAccounts.js  # one-time: run after upgrading an existing deployment
-    │                                 # to user accounts (see "Deployment" below)
+    │   └── migrateToUserAccounts.js  # one-time: run after upgrading an existing
+    │                                 # deployment to add user accounts
     └── src/
         ├── index.js              # Express app, middleware, static hosting, lifecycle
         ├── config/db.js          # Mongo connect w/ SRV-DNS fallback; degrades to in-memory
@@ -253,7 +251,7 @@ rejects malformed URLs with `400`.
 
 ```bash
 npm run install:all          # installs both server/ and client/
-# create server/.env  (see "Environment variables")
+# create server/.env — at minimum needs GOOGLE_API_KEY and JWT_SECRET
 npm run dev                  # server on :5000, client on :5173, run concurrently
 ```
 
@@ -267,68 +265,6 @@ Other root scripts:
 | `npm run build`                | builds the client into `client/dist`                        |
 | `npm start`                    | builds the client, then runs the server in production mode serving that build (single port) |
 | `npm run start:server-only`    | production server without rebuilding the client            |
-
----
-
-## Environment variables
-
-### Backend — `server/.env` locally, host dashboard in production
-
-| Variable                 | Required            | Notes |
-| ------------------------ | ------------------ | ----- |
-| `GOOGLE_API_KEY`         | **yes**            | Server exits on startup without it. |
-| `JWT_SECRET`             | **yes**            | Server exits on startup without it. Signs and verifies login tokens — use a long random string, e.g. `node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"`. Changing it invalidates every existing token (forces re-login). |
-| `MONGO_URI`              | yes in production  | Atlas connection string. Without it, data is in-memory only. |
-| `CLIENT_URL`             | yes in production  | Frontend origin(s) for CORS, e.g. `https://url-chat.vercel.app`. Comma-separate to allow several. |
-| `NODE_ENV`               | yes in production  | Set to `production`. |
-| `PORT`                   | no                 | Defaults to `5000`. |
-| `GOOGLE_CHAT_MODEL`      | no                 | Defaults to `models/gemini-3.6-flash`. |
-| `GOOGLE_EMBEDDING_MODEL` | no                 | Defaults to `models/gemini-embedding-001` (3072 dims — must match the Atlas index). |
-
-### Frontend — `client/.env`
-
-| Variable       | Required           | Notes |
-| -------------- | ----------------- | ----- |
-| `VITE_API_URL` | yes in production | Backend API base, e.g. `https://url-chat-api.onrender.com/api`. Omit locally (Vite proxy handles it). |
-
----
-
-## Deployment
-
-Backend on **Render**, frontend on **Vercel** (or use the single-port `npm start` on any Node host).
-
-### 1. MongoDB Atlas (one-time)
-
-```bash
-node server/scripts/setupVectorIndex.js
-```
-
-Creates the `chunks` collection and the `vector_index` Atlas Vector Search index
-(3072 dimensions, cosine similarity) that retrieval depends on. Atlas takes a minute
-or two to finish building the index before it is queryable.
-
-### 2. Backend (Render)
-
-- Root directory `server/`, build `npm install`, start `npm run start:prod`.
-- Set `GOOGLE_API_KEY`, `JWT_SECRET`, `MONGO_URI`, `CLIENT_URL`, `NODE_ENV=production`.
-
-### 3. Frontend (Vercel)
-
-- Root directory `client/`, framework Vite.
-- Set `VITE_API_URL` to the Render backend URL with `/api` appended.
-
-### 4. Upgrading an existing deployment to user accounts
-
-If you ran this app before accounts existed, run once against production (after
-deploying this code):
-
-```bash
-node server/scripts/migrateToUserAccounts.js
-```
-
-This drops the old global-unique index on `documents.url` (which otherwise blocks two
-different users from ever indexing the same page) and reports any pre-account data —
-it deletes nothing automatically. Skip this step on a brand-new deployment.
 
 ---
 

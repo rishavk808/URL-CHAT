@@ -42,28 +42,34 @@ RAG-powered chat over any webpage. Paste a URL, and ask questions that are answe
 ```mermaid
 flowchart LR
     subgraph Client["Client — React + Vite (Vercel)"]
-        UI["IngestionPanel + ChatPanel"]
-        API["services/api.js (axios)"]
+        UI["AuthScreen + IngestionPanel + ChatPanel"]
+        API["services/api.js (axios, Bearer token)"]
         UI --> API
     end
 
     subgraph Server["Server — Express (Render)"]
+        AR["routes/authRoutes.js"]
+        AC["controllers/authController.js"]
+        RA["requireAuth middleware"]
         R["routes/ragRoutes.js"]
         C["controllers/ragController.js"]
         S["services/ragService.js"]
-        R --> C --> S
+        AR --> AC
+        RA --> R --> C --> S
     end
 
     subgraph External["External services"]
         G["Google Gemini<br/>embeddings + chat"]
-        M[("MongoDB Atlas<br/>documents · chatmessages<br/>chunks + vector_index")]
+        M[("MongoDB Atlas<br/>users · documents · chatmessages<br/>chunks + vector_index")]
         W["Target webpage"]
     end
 
-    API -- "POST /api/ingest<br/>POST /api/chat<br/>GET /api/documents<br/>GET /api/chat/history<br/>DELETE /api/documents/:id" --> R
+    API -- "POST /api/auth/register, /login<br/>GET /api/auth/me" --> AR
+    API -- "Authorization: Bearer token<br/>/api/ingest, /chat, /documents, ..." --> RA
+    AC -- "bcrypt hash + sign JWT" --> M
     S -- "scrape (axios + cheerio)" --> W
     S -- "embed / generate" --> G
-    S -- "vector search + read/write" --> M
+    S -- "vector search + read/write, scoped to userId" --> M
 ```
 
 ### Client
@@ -73,16 +79,24 @@ flowchart LR
   progress stepper) and a **ChatPanel** (markdown-rendered transcript with per-message
   source accordions). Collapses to a slide-in drawer on mobile.
 - `react-markdown` + `remark-gfm` render assistant answers; `lucide-react` for icons.
-- All network calls go through [`client/src/services/api.js`](client/src/services/api.js).
-  In dev, requests hit `/api` and Vite proxies them to `http://localhost:5000`; in prod
-  set `VITE_API_URL` to the backend origin.
+- All network calls go through [`client/src/services/api.js`](client/src/services/api.js),
+  which attaches the logged-in user's JWT as `Authorization: Bearer <token>` to every
+  request. In dev, requests hit `/api` and Vite proxies them to `http://localhost:5000`;
+  in prod set `VITE_API_URL` to the backend origin.
+- The whole app is gated behind [`AuthScreen`](client/src/components/AuthScreen.jsx) —
+  a stored token is validated against `GET /api/auth/me` on load; no valid token means
+  no document library, no chat, just the login/signup form.
 
 ### Server
 
 - **Express** app ([`server/src/index.js`](server/src/index.js)) with `helmet`,
   `compression`, configurable **CORS** (`CLIENT_URL` accepts a comma-separated list),
-  a **rate limiter** (30 req/min on `/api`), request logging, a `/health` endpoint,
-  and graceful shutdown on `SIGINT`/`SIGTERM`.
+  a **rate limiter** (30 req/min on `/api`, 20 req/15min on `/api/auth`), request
+  logging, a `/health` endpoint, and graceful shutdown on `SIGINT`/`SIGTERM`.
+- **Every `/api/*` route requires a logged-in user** except `/api/auth/register` and
+  `/api/auth/login`. [`middleware/auth.js`](server/src/middleware/auth.js) verifies the
+  JWT and attaches `req.userId`; every document, chunk, and chat message is tagged with
+  it, so one user never sees another's data.
 - Thin **routes → controller → service** structure. All RAG logic lives in
   [`server/src/services/ragService.js`](server/src/services/ragService.js); the
   controller only validates input and shapes responses.
@@ -93,9 +107,10 @@ flowchart LR
 
 | Collection      | Written by            | Purpose                                                        |
 | --------------- | --------------------- | ------------------------------------------------------------- |
-| `documents`     | Mongoose `Document`   | One record per indexed URL (title, chunk count, timestamp).   |
-| `chatmessages`  | Mongoose `ChatMessage`| Full per-URL conversation history, incl. stored source chunks.|
-| `chunks`        | LangChain `MongoDBAtlasVectorSearch` | Text chunk + 3072-dim embedding + `{ url, title, chunkIndex }` metadata. Queried through the `vector_index` Atlas Vector Search index. |
+| `users`         | Mongoose `User`       | One record per account: email, bcrypt password hash, createdAt. |
+| `documents`     | Mongoose `Document`   | One record per (user, URL): title, chunk count, timestamp.    |
+| `chatmessages`  | Mongoose `ChatMessage`| Full per-(user, URL) conversation history, incl. stored source chunks. |
+| `chunks`        | LangChain `MongoDBAtlasVectorSearch` | Text chunk + 3072-dim embedding + `{ url, title, userId, chunkIndex }` metadata. Queried through the `vector_index` Atlas Vector Search index, then filtered to the active user and URL. |
 
 If `MONGO_URI` is not set (or Atlas is unreachable at boot), the server runs in
 **in-memory mode**: a LangChain `MemoryVectorStore` plus plain `Map`s hold documents,
@@ -105,9 +120,12 @@ chunks, and chat history for the lifetime of the process.
 
 ## How the RAG pipeline works
 
+Both endpoints below require `Authorization: Bearer <token>` — every call is scoped to
+the requesting user's own documents and chunks.
+
 ### Ingestion — `POST /api/ingest`
 
-`processAndIndexUrl(url)` in [`ragService.js`](server/src/services/ragService.js):
+`processAndIndexUrl(url, userId)` in [`ragService.js`](server/src/services/ragService.js):
 
 1. **Scrape** (`scrapeAndCleanUrl`) – `axios` fetches the HTML with a browser
    User-Agent (15 s timeout). `cheerio` removes `script, style, nav, footer, header,
@@ -125,11 +143,12 @@ The client shows a 4-step progress stepper during this call.
 
 ### Query — `POST /api/chat`
 
-`queryRagChain(url, question)`:
+`queryRagChain(url, question, userId)`:
 
 1. **Retrieve** – `store.similaritySearch(question, 15)`, then filter results down to
-   `metadata.url === url` and keep the top **4** chunks. (Over-fetching then filtering
-   keeps retrieval scoped to the active page even though all pages share one index.)
+   `metadata.url === url && metadata.userId === userId` and keep the top **4** chunks.
+   (Over-fetching then filtering keeps retrieval scoped to one user's copy of one page,
+   even though every user's chunks share the same collection and vector index.)
 2. **Fallback retrieval** – if vector search errors or returns nothing, a keyword
    overlap scorer (`performTextRelevanceSearch`) ranks the in-memory chunks for that URL.
 3. **Assemble context** – chunks are concatenated as `[Source Chunk N]\n…` blocks.
@@ -149,21 +168,29 @@ URL-CHAT/
 ├── client/
 │   ├── vite.config.js        # dev server on :5173, proxies /api → :5000
 │   └── src/
-│       ├── App.jsx           # state: documents, activeDocument, messages, ingest steps
-│       ├── services/api.js   # axios client for all 5 endpoints
-│       └── components/       # Header, IngestionPanel, ChatPanel, StatusStepper,
-│                             # DocumentItem, SourceAccordion
+│       ├── App.jsx           # state: user, documents, activeDocument, messages, ingest steps
+│       ├── services/api.js   # axios client — attaches Bearer token, all 8 endpoints
+│       └── components/       # AuthScreen, Header, IngestionPanel, ChatPanel,
+│                             # StatusStepper, DocumentItem, SourceAccordion
 └── server/
     ├── scripts/
-    │   └── setupVectorIndex.js   # one-time: create `chunks` collection + `vector_index`
+    │   ├── setupVectorIndex.js       # one-time: create `chunks` collection + `vector_index`
+    │   └── migrateToUserAccounts.js  # one-time: run after upgrading an existing deployment
+    │                                 # to user accounts (see "Deployment" below)
     └── src/
         ├── index.js              # Express app, middleware, static hosting, lifecycle
         ├── config/db.js          # Mongo connect w/ SRV-DNS fallback; degrades to in-memory
-        ├── routes/ragRoutes.js
-        ├── controllers/ragController.js
+        ├── middleware/auth.js    # verifies the JWT, attaches req.userId
+        ├── routes/
+        │   ├── authRoutes.js     # register, login (public) · me (requires auth)
+        │   └── ragRoutes.js      # ingest, chat, documents, history (all require auth)
+        ├── controllers/
+        │   ├── authController.js
+        │   └── ragController.js
         ├── services/ragService.js   # scrape · chunk · embed · index · retrieve · generate
         └── models/
-            ├── Document.js
+            ├── User.js           # email, bcrypt passwordHash, createdAt
+            ├── Document.js       # unique per (userId, url)
             └── ChatMessage.js
 ```
 
@@ -171,16 +198,21 @@ URL-CHAT/
 
 ## API reference
 
-Base path: `/api`
+Base path: `/api`. Every route below except the two auth ones requires
+`Authorization: Bearer <token>` (missing/expired/invalid → `401`), and every result is
+scoped to that token's user.
 
-| Method & path              | Body / query                | Returns |
-| -------------------------- | --------------------------- | ------- |
-| `POST /api/ingest`         | `{ url }`                   | `{ success, documentId, url, title, chunkCount, createdAt }` |
-| `POST /api/chat`           | `{ url, question }`         | `{ answer, sources: [{ pageContent, metadata }] }` |
-| `GET /api/chat/history`    | `?url=<url>`                | `{ success, history: ChatMessage[] }` |
-| `GET /api/documents`       | –                          | `{ success, documents: Document[] }` (newest first) |
-| `DELETE /api/documents/:id`| path param `id`            | `{ success, message, deletedId }` — also drops the URL's chunks and chat history |
-| `GET /health`              | –                          | `{ status, environment, timestamp, service }` |
+| Method & path               | Auth required | Body / query                | Returns |
+| ---------------------------- | ------------- | --------------------------- | ------- |
+| `POST /api/auth/register`    | no            | `{ email, password }` (password ≥ 8 chars) | `{ token, user: { id, email } }` · `409` if email taken |
+| `POST /api/auth/login`       | no            | `{ email, password }`       | `{ token, user: { id, email } }` · `401` on bad credentials |
+| `GET /api/auth/me`           | **yes**       | –                            | `{ user: { id, email } }` — used by the client to validate a stored token |
+| `POST /api/ingest`           | **yes**       | `{ url }`                   | `{ success, documentId, url, title, chunkCount, createdAt }` |
+| `POST /api/chat`             | **yes**       | `{ url, question }`         | `{ answer, sources: [{ pageContent, metadata }] }` |
+| `GET /api/chat/history`      | **yes**       | `?url=<url>`                | `{ success, history: ChatMessage[] }` |
+| `GET /api/documents`         | **yes**       | –                            | `{ success, documents: Document[] }` (newest first, this user only) |
+| `DELETE /api/documents/:id`  | **yes**       | path param `id`              | `{ success, message, deletedId }` — also drops the URL's chunks and chat history. `404` if the document isn't yours. |
+| `GET /health`                | no            | –                            | `{ status, environment, timestamp, service }` |
 
 `POST /api/ingest` normalizes bare hosts (`example.com` → `https://example.com`) and
 rejects malformed URLs with `400`.
@@ -189,10 +221,18 @@ rejects malformed URLs with `400`.
 
 ## Data model
 
+**User**
+| Field          | Type   | Notes                              |
+| -------------- | ------ | ----------------------------------- |
+| `email`        | String | unique, lowercased, required        |
+| `passwordHash` | String | bcrypt, 10 salt rounds — never the raw password |
+| `createdAt`    | Date   | defaults to now                     |
+
 **Document**
-| Field        | Type   | Notes                        |
-| ------------ | ------ | ---------------------------- |
-| `url`        | String | unique, required             |
+| Field        | Type     | Notes                        |
+| ------------ | -------- | ---------------------------- |
+| `userId`     | ObjectId | required; compound-unique with `url` — the same URL can be indexed independently by different users |
+| `url`        | String | required                     |
 | `title`     | String | scraped page title           |
 | `chunkCount` | Number | chunks produced at ingest    |
 | `createdAt`  | Date   | defaults to now              |
@@ -200,7 +240,8 @@ rejects malformed URLs with `400`.
 **ChatMessage**
 | Field       | Type                        | Notes                                   |
 | ----------- | --------------------------- | --------------------------------------- |
-| `url`       | String (indexed)            | which source this message belongs to    |
+| `userId`    | ObjectId                    | required; indexed together with `url`  |
+| `url`       | String                       | which source this message belongs to    |
 | `role`      | `'user' \| 'assistant' \| 'system'` | required                        |
 | `content`   | String                      | required                                |
 | `sources`   | `[{ pageContent, metadata }]` | retrieved chunks (assistant messages) |
@@ -236,6 +277,7 @@ Other root scripts:
 | Variable                 | Required            | Notes |
 | ------------------------ | ------------------ | ----- |
 | `GOOGLE_API_KEY`         | **yes**            | Server exits on startup without it. |
+| `JWT_SECRET`             | **yes**            | Server exits on startup without it. Signs and verifies login tokens — use a long random string, e.g. `node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"`. Changing it invalidates every existing token (forces re-login). |
 | `MONGO_URI`              | yes in production  | Atlas connection string. Without it, data is in-memory only. |
 | `CLIENT_URL`             | yes in production  | Frontend origin(s) for CORS, e.g. `https://url-chat.vercel.app`. Comma-separate to allow several. |
 | `NODE_ENV`               | yes in production  | Set to `production`. |
@@ -268,17 +310,34 @@ or two to finish building the index before it is queryable.
 ### 2. Backend (Render)
 
 - Root directory `server/`, build `npm install`, start `npm run start:prod`.
-- Set `GOOGLE_API_KEY`, `MONGO_URI`, `CLIENT_URL`, `NODE_ENV=production`.
+- Set `GOOGLE_API_KEY`, `JWT_SECRET`, `MONGO_URI`, `CLIENT_URL`, `NODE_ENV=production`.
 
 ### 3. Frontend (Vercel)
 
 - Root directory `client/`, framework Vite.
 - Set `VITE_API_URL` to the Render backend URL with `/api` appended.
 
+### 4. Upgrading an existing deployment to user accounts
+
+If you ran this app before accounts existed, run once against production (after
+deploying this code):
+
+```bash
+node server/scripts/migrateToUserAccounts.js
+```
+
+This drops the old global-unique index on `documents.url` (which otherwise blocks two
+different users from ever indexing the same page) and reports any pre-account data —
+it deletes nothing automatically. Skip this step on a brand-new deployment.
+
 ---
 
 ## Design decisions & fallbacks
 
+- **Per-user isolation.** Every document, chunk, and chat message is tagged with the
+  owning user's id and filtered by it on every read, write, and delete — including
+  inside the vector search's post-filter and the in-memory fallback's keys. A document
+  lookup for someone else's id simply returns nothing (`404`), not a permission error.
 - **Graceful degradation.** No Mongo? The server logs a warning and runs on an
   in-memory vector store instead of crashing — handy for demos and local dev.
 - **Retrieval robustness.** If the embedding API or vector index fails at query time,

@@ -9,6 +9,8 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { connectDB } from './config/db.js';
 import ragRoutes from './routes/ragRoutes.js';
+import authRoutes from './routes/authRoutes.js';
+import { requireAuth } from './middleware/auth.js';
 import { rehydrateVectorStoreFromDb } from './services/ragService.js';
 
 // Load environment variables
@@ -21,7 +23,7 @@ const NODE_ENV = process.env.NODE_ENV || 'development';
 const isProduction = NODE_ENV === 'production';
 
 // Fail fast on missing required configuration
-const requiredEnvVars = ['GOOGLE_API_KEY'];
+const requiredEnvVars = ['GOOGLE_API_KEY', 'JWT_SECRET'];
 const missingEnvVars = requiredEnvVars.filter((key) => !process.env[key]);
 if (missingEnvVars.length > 0) {
   console.error(`[Startup Error] Missing required environment variable(s): ${missingEnvVars.join(', ')}`);
@@ -95,8 +97,23 @@ const apiLimiter = rateLimit({
 });
 app.use('/api', apiLimiter);
 
-// API Routes
-app.use('/api', ragRoutes);
+// Stricter limiter on login/register specifically — brute-force protection.
+// Applied in addition to apiLimiter above (both run for /api/auth/*).
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many attempts. Please try again later.' }
+});
+
+// Auth routes are public (no token required yet) — must be mounted before the
+// requireAuth gate below, which protects every other /api route.
+app.use('/api/auth', authLimiter, authRoutes);
+
+// API Routes — every RAG endpoint requires a logged-in user, so each user
+// only ever sees their own documents, chunks, and chat history.
+app.use('/api', requireAuth, ragRoutes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {

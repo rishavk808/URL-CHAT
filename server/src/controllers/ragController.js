@@ -36,7 +36,7 @@ export const ingestUrl = async (req, res) => {
     }
 
     console.log(`[Ingest API] Starting pipeline for URL: ${validatedUrl}`);
-    const result = await processAndIndexUrl(validatedUrl);
+    const result = await processAndIndexUrl(validatedUrl, req.userId);
 
     return res.status(200).json({
       success: true,
@@ -69,7 +69,7 @@ export const chatWithUrl = async (req, res) => {
     }
 
     console.log(`[Chat API] Querying context for "${url}" with question: "${question}"`);
-    const result = await queryRagChain(url.trim(), question.trim());
+    const result = await queryRagChain(url.trim(), question.trim(), req.userId);
 
     return res.status(200).json({
       answer: result.answer,
@@ -89,7 +89,7 @@ export const chatWithUrl = async (req, res) => {
  */
 export const getAllDocuments = async (req, res) => {
   try {
-    const documents = await getStoredDocuments();
+    const documents = await getStoredDocuments(req.userId);
     return res.status(200).json({
       success: true,
       documents
@@ -110,14 +110,18 @@ export const deleteDocument = async (req, res) => {
   try {
     const { id } = req.params;
 
+    // Scoped to req.userId in both lookups: this is also the authorization
+    // check — a user can't delete someone else's document because the query
+    // simply won't find it if it's not theirs (404, not a 403 that would leak
+    // whether the id exists at all).
     let targetUrl = null;
     if (mongoose.connection.readyState === 1) {
-      const doc = await DocumentModel.findById(id);
+      const doc = await DocumentModel.findOne({ _id: id, userId: req.userId });
       if (doc) targetUrl = doc.url;
     }
 
     if (!targetUrl) {
-      const allDocs = await getStoredDocuments();
+      const allDocs = await getStoredDocuments(req.userId);
       const match = allDocs.find((d) => String(d._id) === String(id) || String(d.documentId) === String(id));
       if (match) targetUrl = match.url;
     }
@@ -128,7 +132,7 @@ export const deleteDocument = async (req, res) => {
       });
     }
 
-    await removeDocumentFromStore(targetUrl);
+    await removeDocumentFromStore(targetUrl, req.userId);
 
     return res.status(200).json({
       success: true,
@@ -154,7 +158,7 @@ export const getChatHistory = async (req, res) => {
       return res.status(400).json({ error: 'URL query parameter is required.' });
     }
 
-    const history = await getStoredChatHistory(url);
+    const history = await getStoredChatHistory(url, req.userId);
     return res.status(200).json({
       success: true,
       history

@@ -10,10 +10,14 @@ import { ChatPromptTemplate } from '@langchain/core/prompts';
 import DocumentModel from '../models/Document.js';
 import ChatMessageModel from '../models/ChatMessage.js';
 
-// In-Memory Fallback Storage (when MongoDB is offline/unreachable)
+// In-Memory Fallback Storage (when MongoDB is offline/unreachable).
+// Keyed by `${userId}::${url}` so different users' data never collides, even
+// without a database — see memKey() below.
 const inMemoryDocuments = new Map();
 const inMemoryChatHistory = [];
-const inMemoryChunksMap = new Map(); // Stores text chunks per URL for fallback similarity matching
+const inMemoryChunksMap = new Map(); // Stores text chunks per (user, URL) for fallback similarity matching
+
+const memKey = (userId, url) => `${userId}::${url}`;
 
 let atlasVectorStore = null;
 let memoryVectorStore = null;
@@ -63,14 +67,14 @@ const getVectorStore = async () => {
 };
 
 
- //Remove previously indexed chunks for a URL from whichever vector store backend is active
- 
-const removeUrlFromVectorStore = async (url) => {
+ //Remove previously indexed chunks for a URL (scoped to one user) from whichever vector store backend is active
+
+const removeUrlFromVectorStore = async (url, userId) => {
   if (isDbConnected()) {
-    await mongoose.connection.collection(CHUNKS_COLLECTION).deleteMany({ url });
+    await mongoose.connection.collection(CHUNKS_COLLECTION).deleteMany({ url, userId });
   } else if (memoryVectorStore && memoryVectorStore.memoryVectors) {
     memoryVectorStore.memoryVectors = memoryVectorStore.memoryVectors.filter(
-      (v) => v.metadata && v.metadata.url !== url
+      (v) => !(v.metadata && v.metadata.url === url && v.metadata.userId === userId)
     );
   }
 };
@@ -135,9 +139,11 @@ export const scrapeAndCleanUrl = async (url) => {
 };
 
 /**
- * Ingest URL into vector store and database
+ * Ingest URL into vector store and database, scoped to the requesting user.
+ * The same URL can be ingested independently by different users — each gets
+ * its own chunks, embeddings, and document record.
  */
-export const processAndIndexUrl = async (url) => {
+export const processAndIndexUrl = async (url, userId) => {
   // Step 1: Scrape
   const { title, text } = await scrapeAndCleanUrl(url);
 
@@ -150,13 +156,16 @@ export const processAndIndexUrl = async (url) => {
   const rawDocs = await splitter.createDocuments([text], [{ url, title }]);
   const chunkCount = rawDocs.length;
 
-  // Add chunk metadata index
+  // Add chunk metadata index. userId here is what lets retrieval (and the
+  // keyword fallback) scope results to one user even though all users' chunks
+  // share the same `chunks` collection and vector index.
   const docs = rawDocs.map((doc, idx) => {
     return new LangChainDocument({
       pageContent: doc.pageContent,
       metadata: {
         url,
         title,
+        userId,
         chunkIndex: idx,
         totalChunks: chunkCount
       }
@@ -164,12 +173,12 @@ export const processAndIndexUrl = async (url) => {
   });
 
   // Store chunks in fallback memory map
-  inMemoryChunksMap.set(url, docs);
+  inMemoryChunksMap.set(memKey(userId, url), docs);
 
   // Step 3 & 4: Embed & Index into Vector Store
   try {
     const store = await getVectorStore();
-    await removeUrlFromVectorStore(url); // avoid duplicate chunks if this URL was already indexed
+    await removeUrlFromVectorStore(url, userId); // avoid duplicate chunks if this user already indexed this URL
     await store.addDocuments(docs);
   } catch (embedError) {
     console.warn(`[VectorStore Indexing Notice]: Embedding API warning (${embedError.message}). Fallback chunk index active.`);
@@ -179,8 +188,8 @@ export const processAndIndexUrl = async (url) => {
   let docData;
   if (isDbConnected()) {
     const savedDoc = await DocumentModel.findOneAndUpdate(
-      { url },
-      { title, chunkCount, createdAt: new Date() },
+      { userId, url },
+      { userId, title, chunkCount, createdAt: new Date() },
       { upsert: true, new: true }
     );
     docData = {
@@ -200,7 +209,7 @@ export const processAndIndexUrl = async (url) => {
       chunkCount,
       createdAt: new Date()
     };
-    inMemoryDocuments.set(url, docData);
+    inMemoryDocuments.set(memKey(userId, url), docData);
   }
 
   return docData;
@@ -209,8 +218,8 @@ export const processAndIndexUrl = async (url) => {
 /**
  * Keyword & Text Relevance Fallback Search
  */
-const performTextRelevanceSearch = (url, question, k = 4) => {
-  const docs = inMemoryChunksMap.get(url) || [];
+const performTextRelevanceSearch = (url, userId, question, k = 4) => {
+  const docs = inMemoryChunksMap.get(memKey(userId, url)) || [];
   if (docs.length === 0) return [];
 
   const queryTerms = question.toLowerCase().split(/\W+/).filter(t => t.length > 2);
@@ -233,23 +242,27 @@ const performTextRelevanceSearch = (url, question, k = 4) => {
 };
 
 /**
- * Answer chat question using RAG similarity search and Gemini-1.5-Flash
+ * Answer chat question using RAG similarity search and Gemini-1.5-Flash.
+ * Scoped to userId: results from other users' chunks are filtered out even
+ * though everyone's vectors live in the same collection and index.
  */
-export const queryRagChain = async (url, question) => {
+export const queryRagChain = async (url, question, userId) => {
   let filteredDocs = [];
 
   // Try Vector Store similarity search
   try {
     const store = await getVectorStore();
     const searchResults = await store.similaritySearch(question, 15);
-    filteredDocs = searchResults.filter((doc) => doc.metadata && doc.metadata.url === url).slice(0, 4);
+    filteredDocs = searchResults
+      .filter((doc) => doc.metadata && doc.metadata.url === url && doc.metadata.userId === userId)
+      .slice(0, 4);
   } catch (err) {
     console.warn(`[Vector Search Warning]: ${err.message}. Using fallback relevance index.`);
   }
 
   // Fallback to text relevance search if vector search returned no results
   if (!filteredDocs || filteredDocs.length === 0) {
-    filteredDocs = performTextRelevanceSearch(url, question, 4);
+    filteredDocs = performTextRelevanceSearch(url, userId, question, 4);
   }
 
   // Format context string
@@ -262,12 +275,12 @@ export const queryRagChain = async (url, question) => {
     
     // Save to Chat History
     if (isDbConnected()) {
-      await ChatMessageModel.create({ url, role: 'user', content: question });
-      await ChatMessageModel.create({ url, role: 'assistant', content: fallbackAnswer, sources: [] });
+      await ChatMessageModel.create({ userId, url, role: 'user', content: question });
+      await ChatMessageModel.create({ userId, url, role: 'assistant', content: fallbackAnswer, sources: [] });
     } else {
       inMemoryChatHistory.push(
-        { url, role: 'user', content: question, createdAt: new Date() },
-        { url, role: 'assistant', content: fallbackAnswer, sources: [], createdAt: new Date() }
+        { userId, url, role: 'user', content: question, createdAt: new Date() },
+        { userId, url, role: 'assistant', content: fallbackAnswer, sources: [], createdAt: new Date() }
       );
     }
 
@@ -318,12 +331,12 @@ Context:
 
   // Save to Chat History
   if (isDbConnected()) {
-    await ChatMessageModel.create({ url, role: 'user', content: question });
-    await ChatMessageModel.create({ url, role: 'assistant', content: answer, sources });
+    await ChatMessageModel.create({ userId, url, role: 'user', content: question });
+    await ChatMessageModel.create({ userId, url, role: 'assistant', content: answer, sources });
   } else {
     inMemoryChatHistory.push(
-      { url, role: 'user', content: question, createdAt: new Date() },
-      { url, role: 'assistant', content: answer, sources, createdAt: new Date() }
+      { userId, url, role: 'user', content: question, createdAt: new Date() },
+      { userId, url, role: 'assistant', content: answer, sources, createdAt: new Date() }
     );
   }
 
@@ -334,21 +347,21 @@ Context:
 };
 
 /**
- * Remove document and vectors
+ * Remove a document and its vectors, scoped to the owning user.
  */
-export const removeDocumentFromStore = async (url) => {
-  await removeUrlFromVectorStore(url);
-  inMemoryChunksMap.delete(url);
+export const removeDocumentFromStore = async (url, userId) => {
+  await removeUrlFromVectorStore(url, userId);
+  inMemoryChunksMap.delete(memKey(userId, url));
 
   if (isDbConnected()) {
-    const docResult = await DocumentModel.findOneAndDelete({ url });
-    await ChatMessageModel.deleteMany({ url });
+    const docResult = await DocumentModel.findOneAndDelete({ url, userId });
+    await ChatMessageModel.deleteMany({ url, userId });
     return docResult;
   } else {
-    inMemoryDocuments.delete(url);
+    inMemoryDocuments.delete(memKey(userId, url));
     const indicesToRemove = [];
     inMemoryChatHistory.forEach((msg, i) => {
-      if (msg.url === url) indicesToRemove.push(i);
+      if (msg.url === url && msg.userId === userId) indicesToRemove.push(i);
     });
     for (let i = indicesToRemove.length - 1; i >= 0; i--) {
       inMemoryChatHistory.splice(indicesToRemove[i], 1);
@@ -358,23 +371,26 @@ export const removeDocumentFromStore = async (url) => {
 };
 
 /**
- * Get all document records
+ * Get all document records belonging to one user
  */
-export const getStoredDocuments = async () => {
+export const getStoredDocuments = async (userId) => {
   if (isDbConnected()) {
-    return await DocumentModel.find().sort({ createdAt: -1 });
+    return await DocumentModel.find({ userId }).sort({ createdAt: -1 });
   }
-  return Array.from(inMemoryDocuments.values()).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  return Array.from(inMemoryDocuments.entries())
+    .filter(([key]) => key.startsWith(`${userId}::`))
+    .map(([, value]) => value)
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 };
 
 /**
- *Get chat history for URL
+ * Get one user's chat history for a URL
  */
-export const getStoredChatHistory = async (url) => {
+export const getStoredChatHistory = async (url, userId) => {
   if (isDbConnected()) {
-    return await ChatMessageModel.find({ url }).sort({ createdAt: 1 });
+    return await ChatMessageModel.find({ url, userId }).sort({ createdAt: 1 });
   }
-  return inMemoryChatHistory.filter((msg) => msg.url === url);
+  return inMemoryChatHistory.filter((msg) => msg.url === url && msg.userId === userId);
 };
 
 /**

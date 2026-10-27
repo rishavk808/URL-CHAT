@@ -1,18 +1,13 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Loader2 } from 'lucide-react';
 import Header from './components/Header';
 import IngestionPanel from './components/IngestionPanel';
 import ChatPanel from './components/ChatPanel';
-import AuthScreen from './components/AuthScreen';
 import {
   getDocuments,
   ingestUrl,
   sendChatMessage,
   deleteDocument,
-  getChatHistory,
-  getCurrentUser,
-  getToken,
-  setToken
+  getChatHistory
 } from './services/api';
 
 const SIDEBAR_MIN_WIDTH = 280;
@@ -36,9 +31,6 @@ const readStoredSidebarWidth = () => {
 };
 
 export default function App() {
-  const [user, setUser] = useState(null);
-  const [isAuthChecking, setIsAuthChecking] = useState(true);
-
   const [documents, setDocuments] = useState([]);
   const [activeDocument, setActiveDocument] = useState(null);
   const [messages, setMessages] = useState([]);
@@ -99,41 +91,10 @@ export default function App() {
     return () => window.removeEventListener('resize', handleWindowResize);
   }, []);
 
-  // On first load, validate any stored token before showing the app. A token
-  // left over from a previous login that's since expired or been revoked
-  // should drop back to the login screen rather than silently failing every
-  // request that follows.
+  // Load documents on initial load
   useEffect(() => {
-    const token = getToken();
-    if (!token) {
-      setIsAuthChecking(false);
-      return;
-    }
-    getCurrentUser()
-      .then((data) => setUser(data.user))
-      .catch(() => setToken(null))
-      .finally(() => setIsAuthChecking(false));
+    fetchDocuments();
   }, []);
-
-  // Load documents once a user is authenticated
-  useEffect(() => {
-    if (user) {
-      fetchDocuments();
-    }
-  }, [user]);
-
-  const handleAuthenticated = (token, authenticatedUser) => {
-    setToken(token);
-    setUser(authenticatedUser);
-  };
-
-  const handleLogout = () => {
-    setToken(null);
-    setUser(null);
-    setDocuments([]);
-    setActiveDocument(null);
-    setMessages([]);
-  };
 
   // Fetch chat history whenever active document changes
   useEffect(() => {
@@ -260,18 +221,6 @@ export default function App() {
     }
   };
 
-  if (isAuthChecking) {
-    return (
-      <div className="h-screen w-screen flex items-center justify-center bg-zinc-950">
-        <Loader2 className="w-5 h-5 text-zinc-500 animate-spin" />
-      </div>
-    );
-  }
-
-  if (!user) {
-    return <AuthScreen onAuthenticated={handleAuthenticated} />;
-  }
-
   return (
     <div
       className={`h-screen w-screen flex flex-col bg-zinc-950 text-zinc-100 overflow-hidden font-sans antialiased ${
@@ -282,8 +231,6 @@ export default function App() {
       <Header
         activeDocumentCount={documents.length}
         onToggleSidebar={() => setIsSidebarOpen((v) => !v)}
-        user={user}
-        onLogout={handleLogout}
       />
 
       {/* Main Split Screen Desktop Body */}

@@ -6,7 +6,8 @@ import { GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI } from '@langchain
 import { MemoryVectorStore } from 'langchain/vectorstores/memory';
 import { MongoDBAtlasVectorSearch } from '@langchain/community/vectorstores/mongodb_atlas';
 import { Document as LangChainDocument } from '@langchain/core/documents';
-import { ChatPromptTemplate } from '@langchain/core/prompts';
+import { ChatPromptTemplate, MessagesPlaceholder } from '@langchain/core/prompts';
+import { HumanMessage, AIMessage } from '@langchain/core/messages';
 import DocumentModel from '../models/Document.js';
 import ChatMessageModel from '../models/ChatMessage.js';
 
@@ -21,6 +22,11 @@ let embeddingsEngine = null;
 
 const CHUNKS_COLLECTION = 'chunks';
 const VECTOR_INDEX_NAME = 'vector_index';
+
+// How many prior user/assistant exchanges to carry into a follow-up question.
+// Kept small deliberately: more history costs tokens and makes the rewrite step
+// drift toward older topics the user has already moved on from.
+const CHAT_HISTORY_TURNS = 3;
 
 const isDbConnected = () => mongoose.connection.readyState === 1;
 
@@ -233,15 +239,102 @@ const performTextRelevanceSearch = (url, question, k = 4) => {
 };
 
 /**
+ * Build a Gemini chat model. Temperature is caller-controlled because the two
+ * uses want different behaviour: answering wants a little natural phrasing,
+ * question-rewriting wants a deterministic mechanical transformation.
+ */
+const getChatModel = (temperature) =>
+  new ChatGoogleGenerativeAI({
+    apiKey: process.env.GOOGLE_API_KEY,
+    model: process.env.GOOGLE_CHAT_MODEL || 'models/gemini-3.6-flash',
+    temperature
+  });
+
+/**
+ * Fetch the last few exchanges for a URL, oldest first.
+ */
+const getRecentHistory = async (url) => {
+  const all = await getStoredChatHistory(url);
+  return all
+    .filter((m) => m.role === 'user' || m.role === 'assistant')
+    .slice(-CHAT_HISTORY_TURNS * 2); // each turn is a user message + an assistant reply
+};
+
+/**
+ * Turn a follow-up question into a standalone one using the conversation so far.
+ *
+ * This exists because retrieval embeds the *question*. A bare "who wrote it?"
+ * carries almost no meaning on its own, so its vector lands nowhere near the
+ * relevant chunks and the search returns noise no matter how good the index is.
+ * Rewriting it to "who wrote Game of Thrones?" is what makes follow-ups
+ * retrievable at all.
+ *
+ * Falls back to the original question on any failure — a broken rewrite should
+ * degrade the answer, never break the chat.
+ */
+const rewriteQuestionWithHistory = async (question, history) => {
+  if (history.length === 0) return question; // first question of a conversation
+
+  try {
+    const transcript = history
+      .map((m) => `${m.role === 'assistant' ? 'Assistant' : 'User'}: ${String(m.content).slice(0, 800)}`)
+      .join('\n');
+
+    const rewritePrompt = ChatPromptTemplate.fromMessages([
+      [
+        'system',
+        `You rewrite a follow-up question into a standalone question.
+
+Rules:
+1. Use the conversation history ONLY to resolve references — pronouns like "it", "he", "they", "that", or an implied subject.
+2. If the question already stands on its own, return it completely unchanged.
+3. Never answer the question. Never add facts that are not in the history.
+4. Reply with ONLY the rewritten question — no preamble, quotes, or explanation.
+
+Conversation history:
+{transcript}`
+      ],
+      ['human', 'Follow-up question: {question}']
+    ]);
+
+    const formatted = await rewritePrompt.formatMessages({ transcript, question });
+    const response = await getChatModel(0).invoke(formatted);
+    const rewritten = (typeof response.content === 'string' ? response.content : '').trim();
+
+    // Guard against the model ignoring instructions and rambling or returning
+    // nothing — in either case the original question is the safer input.
+    if (!rewritten || rewritten.length > question.length * 3 + 120) {
+      return question;
+    }
+
+    if (rewritten !== question) {
+      console.log(`[Query Rewrite] "${question}" -> "${rewritten}"`);
+    }
+    return rewritten;
+  } catch (err) {
+    console.warn(`[Query Rewrite Warning]: ${err.message}. Using the original question.`);
+    return question;
+  }
+};
+
+/**
  * Answer chat question using RAG similarity search and Gemini-1.5-Flash
  */
 export const queryRagChain = async (url, question) => {
   let filteredDocs = [];
 
+  // Read history BEFORE this turn is saved, so the current question isn't in
+  // its own history.
+  const history = await getRecentHistory(url);
+
+  // Retrieval runs on the rewritten question; the user's original wording is
+  // what gets shown and stored.
+  const searchQuery = await rewriteQuestionWithHistory(question, history);
+
   // Try Vector Store similarity search
   try {
     const store = await getVectorStore();
-    const searchResults = await store.similaritySearch(question, 15);
+    const searchResults = await store.similaritySearch(searchQuery, 15);
     filteredDocs = searchResults.filter((doc) => doc.metadata && doc.metadata.url === url).slice(0, 4);
   } catch (err) {
     console.warn(`[Vector Search Warning]: ${err.message}. Using fallback relevance index.`);
@@ -249,7 +342,7 @@ export const queryRagChain = async (url, question) => {
 
   // Fallback to text relevance search if vector search returned no results
   if (!filteredDocs || filteredDocs.length === 0) {
-    filteredDocs = performTextRelevanceSearch(url, question, 4);
+    filteredDocs = performTextRelevanceSearch(url, searchQuery, 4);
   }
 
   // Format context string
@@ -278,12 +371,7 @@ export const queryRagChain = async (url, question) => {
   }
 
   // Prepare Gemini Model
-  const apiKey = process.env.GOOGLE_API_KEY;
-  const model = new ChatGoogleGenerativeAI({
-    apiKey,
-    model: process.env.GOOGLE_CHAT_MODEL || 'models/gemini-3.6-flash',
-    temperature: 0.2
-  });
+  const model = getChatModel(0.2);
 
   const promptTemplate = ChatPromptTemplate.fromMessages([
     [
@@ -295,15 +383,26 @@ Rules:
 2. If the context lacks sufficient info, state strictly: "I could not find relevant information in the provided URL."
 3. Do not assume or extrapolate facts not present in the context.
 4. Format your answer with clear markdown (bold headers, bullet points, tables, code blocks) when appropriate.
+5. Earlier messages in this conversation are provided only so you can tell what the
+   user is referring to. They are NOT a source of facts — every factual claim in your
+   answer must come from the Context below, even if you stated something different earlier.
 
 Context:
 {context}`
     ],
+    new MessagesPlaceholder('history'),
     ['human', '{question}']
   ]);
 
+  // Replay prior turns as real chat messages so the model can resolve references
+  // like "it" or "he" on its own.
+  const historyMessages = history.map((m) =>
+    m.role === 'assistant' ? new AIMessage(String(m.content)) : new HumanMessage(String(m.content))
+  );
+
   const formattedPrompt = await promptTemplate.formatMessages({
     context: contextText,
+    history: historyMessages,
     question
   });
 
